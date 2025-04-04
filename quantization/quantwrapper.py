@@ -2,55 +2,57 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from quantization.quantization import Quantization
+
 class QuantWrapper(nn.Module):
-    def __init__(self, module, weight=None, scale=None, zero=None):
+    def __init__(self, module, weight=None, weight_scale=None, weight_zero=None, activation_zero=0, activation_scale=1.0):
         super().__init__()
         self.module = module
-        self.use_quant = False
+        self.use_weightquant = False
+        self.use_activationquant = True
 
-        if weight is not None:
-            self.register_buffer("weight", weight.to(torch.uint8))
-        else:
-            self.register_buffer("weight", None)
+        # Weight Quant Parameters
+        self.register_buffer("weight", weight.to(torch.uint8) if weight is not None else None)
+        self.register_buffer("weight_scale", torch.tensor(weight_scale, dtype=torch.float32) if weight_scale is not None else None)
+        self.register_buffer("weight_zero", torch.tensor(weight_zero, dtype=torch.int32) if weight_zero is not None else None)
 
-        if scale is not None:
-            self.register_buffer("scale", torch.tensor(scale, dtype=torch.float32))
-        else:
-            self.register_buffer("scale", None)
+        # Activation Quant Parameters
+        self.register_buffer("activation_scale", torch.tensor(activation_scale, dtype=torch.float32) if activation_scale is not None else None)
+        self.register_buffer("activation_zero", torch.tensor(activation_zero, dtype=torch.int32) if activation_zero is not None else None)
 
-        if zero is not None:
-            self.register_buffer("zero", torch.tensor(zero, dtype=torch.int32))
-        else:
-            self.register_buffer("zero", None)
+    def update_weight_params(self, weight, scale, zero, dtype=torch.uint8):
+        self.weight = torch.tensor(weight, dtype=dtype)
+        self.weight_scale = torch.tensor(scale, dtype=torch.float32)
+        self.weight_zero = torch.tensor(zero, dtype=torch.float32)
+        self.use_weightquant = True
 
-    def quantize(self, original_tensor=None, uniform_type=None, calibration=None, bits=None):
-        from quantization.quantization import Quantization
-
-        if original_tensor is None:
-            original_tensor = self.module.weight.data
-
-        if original_tensor.dtype == torch.float32:
-            weight_fp32 = self.module.weight.data
-            quantized_weight, scale, zero = Quantization.quantize(weight_fp32, uniform_type=uniform_type, calibration=calibration, bits=bits)
-
-            self.register_buffer("weight", quantized_weight.to(torch.uint8))
-            self.register_buffer("scale", torch.tensor(scale, dtype=torch.float32))
-            self.register_buffer("zero", torch.tensor(zero, dtype=torch.int32))
-            self.use_quant = True
-
-            if 'weight' in self.module._parameters:
-                del self.module._parameters['weight']
+    def update_activation_params(self, act_scale, act_zero):
+        self.act_scale = torch.tensor(act_scale, dtype=torch.float32)
+        self.act_zero = torch.tensor(act_zero, dtype=torch.float32)
+        self.use_activationquant = True
 
     def forward(self, x):
-        from quantization.quantization import Quantization
-        # print("---> forward saved dtype:",self.weight.data.dtype)
-        if self.use_quant: w = Quantization.dequantize(self.weight, self.zero, self.scale)
-        else: w = None
+        # Calculate INT8 x INT8
+        if self.use_weightquant and self.use_activationquant:
+            quantized_activation, self.activation_scale, self.activation_zero, dtype = Quantization.quantize(x, quantization_mode="asymmetric", range_estimator_type="min_max", bits=8, zero=self.activation_zero, scale=self.activation_scale)
+            if isinstance(self.module, nn.Conv2d):
+                return F.conv2d(quantized_activation.to(torch.float32), self.weight.to(torch.float32), self.module.bias, self.module.stride, self.module.padding, self.module.dilation, self.module.groups)
+            elif isinstance(self.module, nn.Linear):
+                output = Quantization.int8_compute(quantized_weight=self.weight.to(torch.float32), quantized_activation=quantized_activation.to(torch.float32), target="linear", weight_scale=self.weight_scale, activation_scale=self.activation_scale, bias=self.module.bias)
+                # return F.linear(quantized_activation.to(torch.float32), self.weight.to(torch.float32), self.module.bias)
+                return output
+            
+        # Calculate INT8 -> FP32 x FP32
+        elif self.use_weightquant and not self.use_activationquant:
+            dequantized_weight = Quantization.dequantize(self.weight, self.weight_zero, self.weight_scale)
+            if isinstance(self.module, nn.Conv2d):
+                return F.conv2d(x, dequantized_weight, self.module.bias, self.module.stride, self.module.padding, self.module.dilation, self.module.groups)
+            elif isinstance(self.module, nn.Linear):
+                return F.linear(x, dequantized_weight, self.module.bias)
 
-        # print("---> forward process dtype:",w.data.dtype)
-        if isinstance(self.module, nn.Conv2d):
-            print("Conv2d")
-            return F.conv2d(x, w, self.module.bias,self.module.stride,self.module.padding,self.module.dilation,self.module.groups)
-        elif isinstance(self.module, nn.Linear):
-            print("Linear")
-            return F.linear(x, w, self.module.bias)
+        else:
+            return self.module(x)
+
+
+
+
