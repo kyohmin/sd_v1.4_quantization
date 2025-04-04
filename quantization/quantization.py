@@ -72,5 +72,23 @@ class Quantization:
         pass
     
     @staticmethod
-    def quantized_ckpt(model, name="quantized.ckpt")
+    def quantized_ckpt(model, name="quantized.ckpt"):
         pass
+
+    @staticmethod
+    def add_quant_wrappers(module, layer_types=(nn.Conv2d, nn.Linear)):
+        for name, child in module.named_children():
+            if isinstance(child, layer_types):
+                setattr(module, name, QuantWrapper(child))
+            else:
+                # Recursively wrap inner children
+                Quantization.add_quant_wrappers(child, layer_types)
+        return module
+
+    @staticmethod
+    def rewrap(model, layer_types=(nn.Conv2d, nn.Linear)):
+        Quantization.add_quant_wrappers(model, layer_types)
+
+        return model
+
+    
