@@ -22,8 +22,7 @@ from ldm.models.diffusion.dpm_solver import DPMSolverSampler
 from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
 from transformers import AutoFeatureExtractor
 
-from quantization.quantization import Quantization
-from quantization.quantwrapper import QuantWrapper
+from quantization.util import Util
 
 # load safety model
 safety_model_id = "CompVis/stable-diffusion-safety-checker"
@@ -239,7 +238,7 @@ def main():
     opt = parser.parse_args()
 
     if opt.laion400m:
-        print("Falling back to LAION 400M model...")
+        ("Falling back to LAION 400M model...")
         opt.config = "configs/latent-diffusion/txt2img-1p4B-eval.yaml"
         opt.ckpt = "models/ldm/text2img-large/model.ckpt"
         opt.outdir = "outputs/txt2img-samples-laion400m"
@@ -248,8 +247,15 @@ def main():
 
     config = OmegaConf.load(f"{opt.config}")
     model = load_model_from_config(config, f"{opt.ckpt}")
-    model = Quantization.rewrap(model, (torch.nn.Conv2d, torch.nn.Linear))
-    model = Quantization.weight_quantization(model, (torch.nn.Conv2d, torch.nn.Linear), "asymmetric", "min_max", 8)
+    
+    # Define Quantization Parameters
+    quantizing_layers = (torch.nn.Linear)
+    uniform_type = "asymmetric"
+    calibration_type = "min_max"
+    bits = 8
+    
+    model = Util.rewrap(model, quantizing_layers)
+    model = Util.quantize_model_weights(model, quantizing_layers, uniform_type, calibration_type, bits)
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model = model.to(device)
