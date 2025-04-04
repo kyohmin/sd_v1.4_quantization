@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-
 class QuantWrapper(nn.Module):
     def __init__(self, module, weight=None, scale=None, zero=None):
         super().__init__()
