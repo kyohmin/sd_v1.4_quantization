@@ -1,52 +1,74 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from ldm.util import instantiate_from_config
 from omegaconf import OmegaConf
 
-from quantization.quantwrapper import QuantWrapper
-
-# CUSTOM Wrapper ============
 class Quantization:
     @staticmethod
-    def quantize(original_tensor,uniform_type = "asymmetric", calibration = "min_max", bits=8):
-        # Calibration Type
-        if calibration == "min_max":
-            min_v, max_v = original_tensor.min().item(), original_tensor.max().item()
-        # tensor does not support percentile (use tensor -> numpy -> tensor)
-        # elif calibration == "percentile":
-            # min_v, max_v = np.percentile(original_tensor, 1), np.percentile(original_tensor, 99)
+    def quantize(original_tensor, quantization_mode = "asymmetric", range_estimator_type = "min_max", bits=8, zero = None, scale = None):
         
-        if uniform_type == "asymmetric":
-            min_q, max_q = 0, 2**bits - 1
-            range_v = max_v - min_v
-            if range_v == 0:
-                scale = 1.0
+        if quantization_mode =="asymmetric": min_q, max_q, dtype = 0, 2**bits - 1, torch.uint8
+        elif quantization_mode =="symmetric": min_q, max_q, dtype = -(2**(bits-1) - 1), (2**(bits-1) - 1), torch.int8
+
+        # Activation Quantization (scale and zero already given)
+        if zero is not None and scale is not None:
+            quantized_tensor =  torch.clamp(torch.round(original_tensor / scale + zero), min_q, max_q).to(dtype)
+            return quantized_tensor, scale, zero, dtype
+
+        # Set Range Estimator type
+        if range_estimator_type == "min_max":
+            min_v = original_tensor.min().item()
+            max_v = original_tensor.max().item()
+        elif range_estimator_type == "percentile":
+            numpy_tensor = original_tensor.detach().cpu().numpy()
+            min_v = np.percentile(numpy_tensor, 1)
+            max_v = np.percentile(numpy_tensor, 99)
+        
+        # Find zero and scale value
+        if quantization_mode == "asymmetric":
+            if (max_v - min_v) == 0:
+                scale = 1.0 # Avoid zero division error
             else:
-                scale = range_v / (max_q - min_q)
+                scale = (max_v - min_v) / (max_q - min_q)
             zero = min_q - (min_v / scale)
             zero = int(round(zero))
-            dtype = torch.uint8
-
-        elif uniform_type == "symmetric":
-            min_q, max_q = -(2**(bits-1) - 1), (2**(bits-1) - 1)
+        elif quantization_mode == "symmetric":
             max_abs = max(abs(min_v), abs(max_v))
             if max_abs == 0:
                 scale = 1.0
             else:
                 scale = max_abs / max_q
-
             zero = 0
-            dtype = torch.int8
 
         quantized_tensor = torch.round(original_tensor / scale + zero)
-        quantized_tensor = torch.clip(quantized_tensor, min_q, max_q).to(dtype)
+        quantized_tensor = torch.clamp(quantized_tensor, min_q, max_q).to(dtype)
 
-        return quantized_tensor, scale, zero
+        return quantized_tensor, scale, zero, dtype
 
     @staticmethod
     def dequantize(quantized_tensor, zero, scale):
         dequantized_tensor = (quantized_tensor.float() - zero) * scale
         return dequantized_tensor
+
+    @staticmethod
+    def int8_compute(quantized_weight, quantized_activation, target, weight_scale, activation_scale, bias):
+        # Perform INT8 x INT8 → INT32 → FP32
+
+        # For Conv2d
+        if target == "conv2D":
+            pass
+        
+        # For Linear 
+        elif target == "linear":
+            int32_accumulated = quantized_activation @ quantized_weight.T
+
+            dequantized_output = int32_accumulated * (weight_scale * activation_scale)
+
+            if bias is not None:
+                dequantized_output += bias
+
+            return dequantized_output
 
     @staticmethod
     def quantization_metric(original_tensor, dequantized_tensor, option = "mse"):
@@ -57,38 +79,8 @@ class Quantization:
 
         return loss
 
-    @staticmethod
-    def weight_quantization(model, layer_types=(nn.Conv2d, nn.Linear),uniform_type = "asymmetric",calibration_type = "min_max",bits = 8):
-        for name, module in model.named_modules():
-            if isinstance(module, QuantWrapper) and isinstance(module.module, layer_types):
-                with torch.no_grad():
-                    module.quantize(uniform_type=uniform_type, calibration=calibration_type, bits=bits)
-                    print("WORKED")
 
-        return model
 
-    @staticmethod
-    def activation_quantization(self):
-        pass
-    
-    @staticmethod
-    def quantized_ckpt(model, name="quantized.ckpt"):
-        pass
 
-    @staticmethod
-    def add_quant_wrappers(module, layer_types=(nn.Conv2d, nn.Linear)):
-        for name, child in module.named_children():
-            if isinstance(child, layer_types):
-                setattr(module, name, QuantWrapper(child))
-            else:
-                # Recursively wrap inner children
-                Quantization.add_quant_wrappers(child, layer_types)
-        return module
-
-    @staticmethod
-    def rewrap(model, layer_types=(nn.Conv2d, nn.Linear)):
-        Quantization.add_quant_wrappers(model, layer_types)
-
-        return model
 
     
