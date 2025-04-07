@@ -11,6 +11,9 @@ class QuantWrapper(nn.Module):
         self.use_weightquant = False
         self.use_activationquant = True
 
+        # Remove when optimizing model
+        self.dict = {"quantization_mode":"asymmetric", "range_estimator_type":"min_max", "bits":8}
+
         # Weight Quant Parameters
         self.register_buffer("weight", weight.to(torch.uint8) if weight is not None else None)
         self.register_buffer("weight_scale", torch.tensor(weight_scale, dtype=torch.float32) if weight_scale is not None else None)
@@ -26,16 +29,19 @@ class QuantWrapper(nn.Module):
         self.weight_zero = torch.tensor(zero, dtype=torch.float32)
         self.use_weightquant = True
 
-    def update_activation_params(self, activation_scale, activation_zero):
+    def _update_activation_params(self, activation_scale, activation_zero):
         self.activation_scale = torch.tensor(activation_scale, dtype=torch.float32)
         self.activation_zero = torch.tensor(activation_zero, dtype=torch.float32)
         self.use_activationquant = True
 
+    def update_dict(self, dict):
+        self.dict = dict
+
     def forward(self, x):
         # Calculate INT8 x INT8
         if self.use_weightquant and self.use_activationquant:
-            quantized_activation, scale, zero, dtype = Quantization.quantize(x, quantization_mode="asymmetric", range_estimator_type="min_max", bits=8)
-            self.update_activation_params(scale, zero)
+            quantized_activation, scale, zero, dtype = Quantization.quantize(x, quantization_mode=self.dict["quantization_mode"], range_estimator_type=self.dict["range_estimator_type"], bits=self.dict["bits"])
+            self._update_activation_params(scale, zero)
             quantized_activation = quantized_activation.to(torch.float32) - self.activation_zero
             quantized_weight = self.weight.to(torch.float32) - self.weight_zero
             # print("act", quantized_activation)
