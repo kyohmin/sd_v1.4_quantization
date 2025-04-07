@@ -34,8 +34,9 @@ class Util:
                 with torch.no_grad():
                     if module.weight == None: weight = module.module.weight.data # PROBLEM
                     else: weight = module.weight
-                    quantized_tensor, scale, zero, dtype = Quantization.quantize(weight)
-                    module.update_weight_params(quantized_tensor, scale, zero)
+                    quantized_tensor, scale, zero, dtype = Quantization.quantize(weight, uniform_type, calibration_type, bits)
+                    module.update_weight_params(quantized_tensor, scale, zero, dtype)
+                    module.update_dict({"quantization_mode":uniform_type, "range_estimator_type":calibration_type, "bits":bits})
                     if 'weight' in module.module._parameters:
                         del module.module._parameters['weight']
 
