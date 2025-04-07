@@ -12,9 +12,9 @@ class Quantization:
         elif quantization_mode =="symmetric": min_q, max_q, dtype = -(2**(bits-1) - 1), (2**(bits-1) - 1), torch.int8
 
         # Activation Quantization (scale and zero already given)
-        if zero is not None and scale is not None:
-            quantized_tensor =  torch.clamp(torch.round(original_tensor / scale + zero), min_q, max_q).to(dtype)
-            return quantized_tensor, scale, zero, dtype
+        # if zero is not None and scale is not None:
+        #     quantized_tensor =  torch.clamp(torch.round(original_tensor / scale + zero), min_q, max_q).to(dtype)
+        #     return quantized_tensor, scale, zero, dtype
 
         # Set Range Estimator type
         if range_estimator_type == "min_max":
@@ -51,24 +51,6 @@ class Quantization:
         dequantized_tensor = (quantized_tensor.float() - zero) * scale
         return dequantized_tensor
 
-    @staticmethod
-    def int8_compute(quantized_weight, quantized_activation, target, weight_scale, activation_scale, bias):
-        # Perform INT8 x INT8 → INT32 → FP32
-
-        # For Conv2d
-        if target == "conv2D":
-            pass
-        
-        # For Linear 
-        elif target == "linear":
-            int32_accumulated = quantized_activation @ quantized_weight.T
-
-            dequantized_output = int32_accumulated * (weight_scale * activation_scale)
-
-            if bias is not None:
-                dequantized_output += bias
-
-            return dequantized_output
 
     @staticmethod
     def quantization_metric(original_tensor, dequantized_tensor, option = "mse"):
