@@ -238,7 +238,7 @@ def main():
     opt = parser.parse_args()
 
     if opt.laion400m:
-        ("Falling back to LAION 400M model...")
+        print("Falling back to LAION 400M model...")
         opt.config = "configs/latent-diffusion/txt2img-1p4B-eval.yaml"
         opt.ckpt = "models/ldm/text2img-large/model.ckpt"
         opt.outdir = "outputs/txt2img-samples-laion400m"
@@ -249,7 +249,7 @@ def main():
     model = load_model_from_config(config, f"{opt.ckpt}")
     
     # Define Quantization Parameters
-    quantizing_layers = (torch.nn.Linear)
+    quantizing_layers = (torch.nn.Conv2d, torch.nn.Linear)
     uniform_type = "asymmetric"
     calibration_type = "min_max"
     bits = 8
