@@ -22,11 +22,10 @@ git clone https://github.com/your_username/sd_v1.4_quantization.git
 ```
 
 ## Usage
-Import the quantization module and apply it to your Stable Diffusion model.
+Import the quantization module and apply it to your Stable Diffusion inference file.
 
 ```python
-from quantization import Quantization
-from quantization.quantwrapper import QuantWrapper
+from quantization.util import Util
 ```
 
 ## References
