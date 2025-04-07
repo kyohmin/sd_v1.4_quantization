@@ -8,7 +8,7 @@ The project implements quantization methods using static utility methods that si
 ## Key Features
 **Weight Quantization:** Automatically quantize convolutional and linear layers using a custom quantization wrapper.
 
-**Activation Quantization**: (Planned) Future support for activation quantization.
+**Activation Quantization**: Future support for activation quantization.
 
 **Stateless Utility Functions**: All functions are implemented as static methods, clarifying that they do not rely on class or instance state.
 
@@ -26,6 +26,18 @@ Import the quantization module and apply it to your Stable Diffusion inference f
 
 ```python
 from quantization.util import Util
+
+# Define Quantization Parameters
+quantizing_layers = (torch.nn.Conv2d, torch.nn.Linear)
+uniform_type = "asymmetric"
+calibration_type = "min_max"
+bits = 8
+
+# Wrap existing torch.nn.Conv2d and torch.nn.Linear with QuantWrapper
+model = Util.rewrap(model, quantizing_layers)
+
+# Quantize the weights of the selected layers accordingly
+model = Util.quantize_model_weights(model, quantizing_layers, uniform_type, calibration_type, bits)
 ```
 
 ## References
