@@ -24,12 +24,12 @@ class Util:
     @staticmethod
     def quantize_model_weights(
         model,
-        layer_types=(torch.nn.Conv2d, torch.nn.Linear),
+        layer_types=(torch.nn.Linear, torch.nn.Conv2d),
         uniform_type="asymmetric",
         calibration_type = "min_max",
         bits = 8
         ):
-        for name, module in model.named_modules():
+        for name, module in model.model.diffusion_model.named_modules():
             if isinstance(module, QuantWrapper) and isinstance(module.module, layer_types):
                 with torch.no_grad():
                     if module.weight == None: weight = module.module.weight.data # PROBLEM
@@ -46,3 +46,20 @@ class Util:
     @staticmethod
     def calibrate_activation_parameters(model, ):
         pass
+
+    @staticmethod
+    def check_failure(
+        model,
+        layer_types=(torch.nn.Linear, torch.nn.Conv2d),
+        uniform_type="asymmetric",
+        calibration_type = "min_max",
+        bits = 8
+        ):
+        for name, module in model.model.diffusion_model.named_modules():
+            if isinstance(module, QuantWrapper) and isinstance(module.module, layer_types):
+                with torch.no_grad():
+                    if module.failed == False:
+                        print("Success -", name, module.module)
+
+                    if module.failed == True:
+                        print("Failed  -", name, module.module)
