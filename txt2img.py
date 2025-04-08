@@ -249,7 +249,7 @@ def main():
     model = load_model_from_config(config, f"{opt.ckpt}")
     
     # Define Quantization Parameters
-    quantizing_layers = (torch.nn.Conv2d, torch.nn.Linear)
+    quantizing_layers = (torch.nn.Linear, torch.nn.Conv2d)
     uniform_type = "asymmetric"
     calibration_type = "min_max"
     bits = 8
@@ -298,6 +298,7 @@ def main():
         start_code = torch.randn([opt.n_samples, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
 
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
+    start_time = time.time()
     with torch.no_grad():
         with precision_scope("cuda"):
             with model.ema_scope():
@@ -358,7 +359,9 @@ def main():
 
     print(f"Your samples are ready and waiting for you here: \n{outpath} \n"
           f" \nEnjoy.")
-
+    end_time = time.time()
+    print(f"Execution time: {(end_time - start_time):.4f} seconds")
+    Util.check_failure(model)
 
 if __name__ == "__main__":
     main()
