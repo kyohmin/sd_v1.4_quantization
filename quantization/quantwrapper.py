@@ -10,6 +10,7 @@ class QuantWrapper(nn.Module):
         self.module = module
         self.use_weightquant = False
         self.use_activationquant = True
+        self.failed = False
 
         # Remove when optimizing model
         self.dict = {"quantization_mode":"asymmetric", "range_estimator_type":"min_max", "bits":8}
@@ -53,10 +54,11 @@ class QuantWrapper(nn.Module):
                     output_32 = output_32 + self.module.bias.view(1,-1,1,1)
 
                 if torch.any(torch.isnan(output_32)) or torch.any(torch.isinf(output_32)):
-                    print("Original - CONV2D")
+                    # print("Original - CONV2D")
+                    self.failed = True
                     dequantized_weight = Quantization.dequantize(self.weight, self.weight_zero, self.weight_scale)
                     return F.conv2d(x, dequantized_weight, self.module.bias, self.module.stride, self.module.padding, self.module.dilation, self.module.groups)
-                print("INT8 - CONV2D")
+                # print("INT8 - CONV2D")
                 return output_32
             
             elif isinstance(self.module, nn.Linear):
@@ -67,11 +69,12 @@ class QuantWrapper(nn.Module):
                     output_32 = output_32 + self.module.bias
 
                 if torch.any(torch.isnan(output_32)) or torch.any(torch.isinf(output_32)):
-                    print("Original - LINEAR")
+                    # print("Original - LINEAR")
+                    self.failed = True
                     dequantized_weight = Quantization.dequantize(self.weight, self.weight_zero, self.weight_scale)
                     return F.linear(x, dequantized_weight, self.module.bias)
 
-                print("INT8 - LINEAR")
+                # print("INT8 - LINEAR")
                 return output_32
             
         # Calculate INT8 -> FP32 x FP32
