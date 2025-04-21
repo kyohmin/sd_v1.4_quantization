@@ -17,22 +17,22 @@ class QuantWrapper(nn.Module):
 
         # Weight Quant Parameters
         self.register_buffer("weight", weight.to(torch.uint8) if weight is not None else None)
-        self.register_buffer("weight_scale", torch.tensor(weight_scale, dtype=torch.float32) if weight_scale is not None else None)
+        self.register_buffer("weight_scale", torch.tensor(weight_scale, dtype=torch.float16) if weight_scale is not None else None)
         self.register_buffer("weight_zero", torch.tensor(weight_zero, dtype=torch.int32) if weight_zero is not None else None)
 
         # Activation Quant Parameters
-        self.register_buffer("activation_scale", torch.tensor(activation_scale, dtype=torch.float32) if activation_scale is not None else None)
+        self.register_buffer("activation_scale", torch.tensor(activation_scale, dtype=torch.float16) if activation_scale is not None else None)
         self.register_buffer("activation_zero", torch.tensor(activation_zero, dtype=torch.int32) if activation_zero is not None else None)
 
     def update_weight_params(self, weight, scale, zero, dtype=torch.uint8):
         self.weight = torch.tensor(weight, dtype=dtype)
-        self.weight_scale = torch.tensor(scale, dtype=torch.float32)
-        self.weight_zero = torch.tensor(zero, dtype=torch.float32)
+        self.weight_scale = torch.tensor(scale, dtype=torch.float16)
+        self.weight_zero = torch.tensor(zero, dtype=torch.float16)
         self.use_weightquant = True
 
     def _update_activation_params(self, activation_scale, activation_zero):
-        self.activation_scale = torch.tensor(activation_scale, dtype=torch.float32)
-        self.activation_zero = torch.tensor(activation_zero, dtype=torch.float32)
+        self.activation_scale = torch.tensor(activation_scale, dtype=torch.float16)
+        self.activation_zero = torch.tensor(activation_zero, dtype=torch.float16)
         self.use_activationquant = True
 
     def update_dict(self, dict):
@@ -43,39 +43,44 @@ class QuantWrapper(nn.Module):
         if self.use_weightquant and self.use_activationquant:
             quantized_activation, scale, zero, dtype = Quantization.quantize(x, quantization_mode=self.dict["quantization_mode"], range_estimator_type=self.dict["range_estimator_type"], bits=self.dict["bits"])
             self._update_activation_params(scale, zero)
-            quantized_activation = quantized_activation.to(torch.float32) - self.activation_zero
-            quantized_weight = self.weight.to(torch.float32) - self.weight_zero
+            quantized_activation = quantized_activation.to(torch.float16) - self.activation_zero
+            quantized_weight = self.weight.to(torch.float16) - self.weight_zero
+            shift_scale = 1/ 16.0
+            quantized_activation = quantized_activation * shift_scale
+            quantized_weight = quantized_weight * shift_scale
             # print("act", quantized_activation)
             # print("weight", quantized_weight)
             if isinstance(self.module, nn.Conv2d):
-                output_32 = F.conv2d(quantized_activation,quantized_weight, bias=None, stride=self.module.stride, padding=self.module.padding, dilation=self.module.dilation, groups=self.module.groups)
-                output_32 = output_32 * (self.weight_scale * self.activation_scale)
+                output_16 = F.conv2d(quantized_activation,quantized_weight, bias=None, stride=self.module.stride, padding=self.module.padding, dilation=self.module.dilation, groups=self.module.groups)
+                output_16 = torch.clamp((output_16 / (shift_scale * shift_scale).round(), 0, 255).to(torch.float16))
+                output_16 = output_16 * (self.weight_scale * self.activation_scale)
                 if self.module.bias is not None:
-                    output_32 = output_32 + self.module.bias.view(1,-1,1,1)
+                    output_16 = output_16 + self.module.bias.view(1,-1,1,1)
 
-                if torch.any(torch.isnan(output_32)) or torch.any(torch.isinf(output_32)):
+                if torch.any(torch.isnan(output_16)) or torch.any(torch.isinf(output_16)):
                     # print("Original - CONV2D")
                     self.failed = True
                     dequantized_weight = Quantization.dequantize(self.weight, self.weight_zero, self.weight_scale)
                     return F.conv2d(x, dequantized_weight, self.module.bias, self.module.stride, self.module.padding, self.module.dilation, self.module.groups)
                 # print("INT8 - CONV2D")
-                return output_32
+                return output_16
             
             elif isinstance(self.module, nn.Linear):
-                output_32 = F.linear(quantized_activation, quantized_weight, bias = None)
-                output_32 = output_32 * (self.weight_scale * self.activation_scale)
+                output_16 = F.linear(quantized_activation, quantized_weight, bias = None)
+                output_16 = torch.clamp((output_16 / (shift_scale * shift_scale).round(), 0, 255).to(torch.float16))
+                output_16 = output_16 * (self.weight_scale * self.activation_scale)
 
                 if self.module.bias is not None:
-                    output_32 = output_32 + self.module.bias
+                    output_16 = output_16 + self.module.bias
 
-                if torch.any(torch.isnan(output_32)) or torch.any(torch.isinf(output_32)):
+                if torch.any(torch.isnan(output_16)) or torch.any(torch.isinf(output_16)):
                     # print("Original - LINEAR")
                     self.failed = True
                     dequantized_weight = Quantization.dequantize(self.weight, self.weight_zero, self.weight_scale)
                     return F.linear(x, dequantized_weight, self.module.bias)
 
                 # print("INT8 - LINEAR")
-                return output_32
+                return output_16
             
         # Calculate INT8 -> FP32 x FP32
         elif self.use_weightquant and not self.use_activationquant:
