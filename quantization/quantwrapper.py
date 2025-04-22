@@ -16,13 +16,13 @@ class QuantWrapper(nn.Module):
         self.dict = {"quantization_mode":"asymmetric", "range_estimator_type":"min_max", "bits":8}
 
         # Weight Quant Parameters
-        self.register_buffer("weight", weight.to(torch.uint8) if weight is not None else None)
-        self.register_buffer("weight_scale", torch.tensor(weight_scale, dtype=torch.float16) if weight_scale is not None else None)
-        self.register_buffer("weight_zero", torch.tensor(weight_zero, dtype=torch.int32) if weight_zero is not None else None)
+        self.register_buffer("weight", weight.to(torch.uint8) if weight is not None else None) # Change it to be tensor or list
+        self.register_buffer("weight_scale", torch.tensor(weight_scale, dtype=torch.float16) if weight_scale is not None else None) # Change it to be tensor or list
+        self.register_buffer("weight_zero", torch.tensor(weight_zero, dtype=torch.int32) if weight_zero is not None else None) # Change it to be tensor or list
 
         # Activation Quant Parameters
-        self.register_buffer("activation_scale", torch.tensor(activation_scale, dtype=torch.float16) if activation_scale is not None else None)
-        self.register_buffer("activation_zero", torch.tensor(activation_zero, dtype=torch.int32) if activation_zero is not None else None)
+        self.register_buffer("activation_scale", torch.tensor(activation_scale, dtype=torch.float16) if activation_scale is not None else None) # Change it to be tensor or list (Must match the length of weight channel)
+        self.register_buffer("activation_zero", torch.tensor(activation_zero, dtype=torch.int32) if activation_zero is not None else None) # Change it to be tensor or list (Must match the length of weight channel)
 
     def update_weight_params(self, weight, scale, zero, dtype=torch.uint8):
         self.weight = torch.tensor(weight, dtype=dtype)
@@ -43,17 +43,14 @@ class QuantWrapper(nn.Module):
         if self.use_weightquant and self.use_activationquant:
             quantized_activation, scale, zero, dtype = Quantization.quantize(x, quantization_mode=self.dict["quantization_mode"], range_estimator_type=self.dict["range_estimator_type"], bits=self.dict["bits"])
             self._update_activation_params(scale, zero)
-            quantized_activation = quantized_activation.to(torch.float16) - self.activation_zero
-            quantized_weight = self.weight.to(torch.float16) - self.weight_zero
-            shift_scale = 1/ 16.0
-            quantized_activation = quantized_activation * shift_scale
-            quantized_weight = quantized_weight * shift_scale
-            # print("act", quantized_activation)
-            # print("weight", quantized_weight)
+
+            shift_bits = 4
+            quantized_activation = (quantized_activation.to(torch.float32) - self.activation_zero) >> shift_bits
+            quantized_weight = (self.weight.to(torch.float32) - self.weight_zero) >> shift_bits
+
             if isinstance(self.module, nn.Conv2d):
                 output_16 = F.conv2d(quantized_activation,quantized_weight, bias=None, stride=self.module.stride, padding=self.module.padding, dilation=self.module.dilation, groups=self.module.groups)
-                output_16 = torch.clamp((output_16 / (shift_scale * shift_scale).round(), 0, 255).to(torch.float16))
-                output_16 = output_16 * (self.weight_scale * self.activation_scale)
+                output_16 = output_16 * (self.weight_scale * self.activation_scale) * (1 << (2*shift_bits))
                 if self.module.bias is not None:
                     output_16 = output_16 + self.module.bias.view(1,-1,1,1)
 
@@ -67,8 +64,7 @@ class QuantWrapper(nn.Module):
             
             elif isinstance(self.module, nn.Linear):
                 output_16 = F.linear(quantized_activation, quantized_weight, bias = None)
-                output_16 = torch.clamp((output_16 / (shift_scale * shift_scale).round(), 0, 255).to(torch.float16))
-                output_16 = output_16 * (self.weight_scale * self.activation_scale)
+                output_16 = output_16 * (self.weight_scale * self.activation_scale) * (1 << (2*shift_bits))
 
                 if self.module.bias is not None:
                     output_16 = output_16 + self.module.bias
