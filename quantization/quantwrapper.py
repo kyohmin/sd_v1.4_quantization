@@ -44,10 +44,13 @@ class QuantWrapper(nn.Module):
             quantized_activation, scale, zero, dtype = Quantization.quantize(x, quantization_mode=self.dict["quantization_mode"], range_estimator_type=self.dict["range_estimator_type"], bits=self.dict["bits"])
             self._update_activation_params(scale, zero)
 
+            # Bit Shift
             shift_bits = 4
             quantized_activation = (quantized_activation.to(torch.float32) - self.activation_zero) >> shift_bits
             quantized_weight = (self.weight.to(torch.float32) - self.weight_zero) >> shift_bits
 
+            # quantized_activation = quantized_activation * shift_scale
+            # quantized_weight = quantized_weight * shift_scale
             if isinstance(self.module, nn.Conv2d):
                 output_16 = F.conv2d(quantized_activation,quantized_weight, bias=None, stride=self.module.stride, padding=self.module.padding, dilation=self.module.dilation, groups=self.module.groups)
                 output_16 = output_16 * (self.weight_scale * self.activation_scale) * (1 << (2*shift_bits))

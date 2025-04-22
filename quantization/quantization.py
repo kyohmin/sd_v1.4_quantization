@@ -37,6 +37,36 @@ class Quantization:
 
         return quantized_tensor, scale, zero, dtype
 
+    # @staticmethod
+    # def quantize_by_channel(original_tensor, quantization_mode = "asymmetric", range_estimator_type = "min_max", bits=8, zero = None, scale = None):
+    #     qmin, qmax = 0, 2**bits - 1
+    #     dtype = torch.uint8
+
+    #     # 1) figure out which dims to reduce:
+    #     #    keep axis 0 (out‑channels or rows), collapse the rest
+    #     dims_to_reduce = tuple(i for i in range(original_tensor.ndim) if i != 0)
+
+    #     # 2) min/max per “channel” (axis 0)
+    #     min_c = original_tensor.amin(dim=dims_to_reduce)
+    #     max_c = original_tensor.amax(dim=dims_to_reduce)
+
+    #     # 3) compute scale & zero_point (shape: (C_out,))
+    #     scale = (max_c - min_c) / float(qmax - qmin)
+    #     zero_point = torch.round(qmin - min_c / scale).clamp(qmin, qmax).to(torch.int32)
+
+    #     # 4) reshape for broadcasting back onto the full tensor
+    #     #    build a shape of [C_out, 1, 1, …] matching original_tensor.ndim
+    #     bc_shape = [1] * original_tensor.ndim
+    #     bc_shape[0] = original_tensor.shape[0]      # C_out
+    #     scale_bc = scale.view(bc_shape)
+    #     zero_bc  = zero_point.view(bc_shape)
+
+    #     # 5) quantize
+    #     q = torch.round(original_tensor / scale_bc + zero_bc)
+    #     q = torch.clamp(q, qmin, qmax).to(dtype)
+
+    #     return q, scale, zero_point, dtype
+
     @staticmethod
     def dequantize(quantized_tensor, zero, scale):
         dequantized_tensor = (quantized_tensor.float() - zero) * scale

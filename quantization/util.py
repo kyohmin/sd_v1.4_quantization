@@ -11,9 +11,9 @@ class Util:
         return model
 
     @staticmethod
-    def add_wrapper(module, layer_types=(torch.nn.Conv2d, torch.nn.Linear)):
+    def add_wrapper(module, layer_types=(torch.nn.Conv2d, torch.nn.Linear), skip_keys=()):
         for name, child in module.named_children():
-            if any(skip_key in name for skip_key in ("time_embed", "attn1")):
+            if any(skip_key in name for skip_key in skip_keys):
                 continue
             if isinstance(child, layer_types):
                 setattr(module, name, QuantWrapper(child))
@@ -21,6 +21,8 @@ class Util:
                 # Recursively wrap inner children
                 Util.add_wrapper(child, layer_types)
         return module
+
+        
     
     # QUANTIZE WRAPPED MODEL =====
     @staticmethod
@@ -34,7 +36,7 @@ class Util:
         for name, module in model.model.diffusion_model.named_modules():
             if isinstance(module, QuantWrapper) and isinstance(module.module, layer_types):
                 with torch.no_grad():
-                    if module.weight == None: weight = module.module.weight.data # PROBLEM
+                    if module.weight == None: weight = module.module.weight.data 
                     else: weight = module.weight
                     quantized_tensor, scale, zero, dtype = Quantization.quantize(weight, uniform_type, calibration_type, bits)
                     module.update_weight_params(quantized_tensor, scale, zero, dtype)
@@ -43,6 +45,42 @@ class Util:
                         del module.module._parameters['weight']
 
         return model
+    
+    # @staticmethod
+    # def quantize_model_weights(
+    #     model,
+    #     layer_types=(torch.nn.Linear, torch.nn.Conv2d),
+    #     uniform_type="asymmetric",
+    #     calibration_type="min_max",
+    #     bits=8
+    # ):
+    #     for name, module in model.model.diffusion_model.named_modules():
+    #         if isinstance(module, QuantWrapper) and isinstance(module.module, layer_types):
+    #             with torch.no_grad():
+    #                 # grab either the already‑stored quant weight or the raw float weight
+    #                 weight = module.weight if module.weight is not None else module.module.weight.data
+
+    #                 # use per‑channel quantization
+    #                 q_w, scales, zero_points, dtype = Quantization.quantize_by_channel(
+    #                     weight,
+    #                     uniform_type,
+    #                     calibration_type,
+    #                     bits
+    #                 )
+
+    #                 # update the wrapper with the new params
+    #                 module.update_weight_params(q_w, scales, zero_points, dtype)
+    #                 module.update_dict({
+    #                     "quantization_mode": uniform_type,
+    #                     "range_estimator_type": calibration_type,
+    #                     "bits": bits
+    #                 })
+
+    #                 # remove the original float parameter so only q_w remains
+    #                 if 'weight' in module.module._parameters:
+    #                     del module.module._parameters['weight']
+
+    #     return model
 
     # Activation Calibration
     @staticmethod
