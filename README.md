@@ -12,7 +12,7 @@ The project implements quantization methods using static utility methods that si
 
 **Stateless Utility Functions**: All functions are implemented as static methods, clarifying that they do not rely on class or instance state.
 
-Modular Design: Easily integrate with existing PyTorch-based pipelines.
+**Modular Design**: Easily integrate with existing PyTorch-based pipelines.
 
 ## Installation
 Clone the Repository:
