@@ -8,7 +8,7 @@ The project implements quantization methods using static utility methods that si
 ## Key Features
 **Weight Quantization:** Automatically quantize convolutional and linear layers using a custom quantization wrapper.
 
-**Activation Quantization**: Future support for activation quantization.
+**Activation Quantization**: Run-time activation quantization.
 
 **Stateless Utility Functions**: All functions are implemented as static methods, clarifying that they do not rely on class or instance state.
 
