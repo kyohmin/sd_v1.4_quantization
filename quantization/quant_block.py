@@ -64,21 +64,19 @@ class QuantResBlock(BaseQuantBlock, TimestepBlock):
         :return: an [N x C x ...] Tensor of outputs.
         """
 
-        # fix
-        # if split != 0 and self.skip_connection.split == 0:
-        #     return checkpoint(
-        #         self._forward, (x, emb, split), self.parameters(), self.use_checkpoint
-        #     )
+        if split != 0 and self.skip_connection.split == 0:
+            return checkpoint(
+                self._forward, (x, emb, split), self.parameters(), self.use_checkpoint
+            )
         
         # original
         return checkpoint(self._forward, (x, emb, split), self.parameters(), self.use_checkpoint)  
 
     def _forward(self, x, emb, split=0):
-        # fix2
-        # if emb is None:
-        #     assert(len(x) == 2)
-        #     x, emb = x
-        # assert x.shape[2] == x.shape[3]
+        if emb is None:
+            assert(len(x) == 2)
+            x, emb = x
+        assert x.shape[2] == x.shape[3]
 
         # Identical
         if self.updown:
@@ -346,13 +344,13 @@ class QuantAttnBlock(BaseQuantBlock):
         self.v = attn.v
         self.proj_out = attn.proj_out
 
-        self.act_quantizer_q = UniformAffineQuantizer(**act_quant_params)
-        self.act_quantizer_k = UniformAffineQuantizer(**act_quant_params)
-        self.act_quantizer_v = UniformAffineQuantizer(**act_quant_params)
+        self.act_quantizer_q = Quantizer(**act_quant_params)
+        self.act_quantizer_k = Quantizer(**act_quant_params)
+        self.act_quantizer_v = Quantizer(**act_quant_params)
         
         act_quant_params_w = act_quant_params.copy()
         act_quant_params_w['n_bits'] = sm_abit
-        self.act_quantizer_w = UniformAffineQuantizer(**act_quant_params_w)
+        self.act_quantizer_w = Quantizer(**act_quant_params_w)
 
 
     def forward(self, x):

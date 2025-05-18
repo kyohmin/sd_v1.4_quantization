@@ -1,8 +1,11 @@
 import torch
 import torch.nn as nn
 
+def round_ste(x: torch.Tensor):
+        return (x.round() - x).detach() + x
+
 class Quantizer(nn.Module):
-    def __init__(self, n_bits: int = 8, channel_wise: bool = True, leaf_param: bool = False, scale_method: str = "min_max"):
+    def __init__(self, n_bits: int = 8, channel_wise: bool = True, leaf_param: bool = False, scale_method: str = "min_max", always_zero: bool = False):
         super().__init__()
         self.n_bits = n_bits
         self.q_max = 2 ** self.n_bits - 1  # Asymmetric-only
@@ -11,6 +14,7 @@ class Quantizer(nn.Module):
         self.zero = None
         self.inited = False
         self.channel_wise = channel_wise
+        self.always_zero = always_zero
 
         # For Activation
         self.running_stat = False
@@ -36,12 +40,10 @@ class Quantizer(nn.Module):
     
     def quantize(self, x: torch.Tensor, scale: torch.Tensor, zero: torch.Tensor):
         x_quant = torch.clamp(self.round_ste(x / self.scale) + self.zero, 0, self.q_max)
-        
         return x_quant
 
     def dequantize(self, x: torch.Tensor, scale: torch.Tensor, zero: torch.Tensor):
         x_dequant = (x - zero) * self.scale
-
         return x_dequant
 
     def new_get_scale_zero(self, x: torch.Tensor, channel_wise: bool = True):
@@ -84,39 +86,6 @@ class Quantizer(nn.Module):
             zero = torch.round(torch.tensor((-x_min) / scale, dtype=x.dtype, device=x.device))
 
             return scale, zero
-
-
-    def get_scale_zero(self, x: torch.Tensor, channel_wise: bool = True):
-        if channel_wise:
-            x_clone = x.clone().detach()
-            n_channels = x_clone.shape[0]
-
-            scale = torch.zeros(n_channels, dtype=x.dtype, device=x.device)
-            zero = torch.zeros(n_channels, dtype=x.dtype, device=x.device)
-
-            for c in range(n_channels):
-                x_min = x_clone[c].min().item()
-                x_max = x_clone[c].max().item()
-                scale_val = max(x_max - x_min, 1e-8) / self.q_max
-                scale[c] = scale_val
-                zero_val = round(-x_min / scale_val)
-                zero[c] = zero_val
-
-            shape = [-1] + [1] * (x.dim() - 1)
-            return scale.view(*shape), zero.view(*shape)
-
-        else:
-            x_min = x.min().item()
-            x_max = x.max().item()
-
-            scale_val = max(x_max - x_min, 1e-8) / self.q_max
-            scale = torch.tensor(scale_val, dtype=x.dtype, device=x.device)
-            zero = torch.round(torch.tensor((-x_min) / scale, dtype=x.dtype, device=x.device))
-            return scale, zero.to(torch.uint8)
-
-    @staticmethod
-    def round_ste(x: torch.Tensor):
-        return (x.round() - x).detach() + x
 
     def act_momentum_update(self, x: torch.Tensor, act_range_momentum: float = 0.95):
         assert(self.inited)
