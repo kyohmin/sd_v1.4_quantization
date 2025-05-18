@@ -4,6 +4,11 @@ from quantization.quantwrapper import Quantization
 from quantization.quantwrapper import QuantWrapper
 
 class Util:
+    @staticmethod
+    def round_ste(x: torch.Tensor):
+        return (x.round() - x).detach() + x
+
+
     # MODEL WRAPPING
     @staticmethod
     def rewrap(model, layer_types=(torch.nn.Conv2d, torch.nn.Linear)):
