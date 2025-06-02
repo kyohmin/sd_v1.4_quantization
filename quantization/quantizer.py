@@ -4,6 +4,12 @@ import torch.nn as nn
 def round_ste(x: torch.Tensor):
         return (x.round() - x).detach() + x
 
+def lp_loss(pred, tgt, p=2.0, reduction='none'):
+    if reduction == 'none':
+        return (pred-tgt).abs().pow(p).sum(1).mean()
+    else:
+        return (pred-tgt).abs().pow(p).mean()
+
 class Quantizer(nn.Module):
     def __init__(self, n_bits: int = 8, channel_wise: bool = True, leaf_param: bool = False, scale_method: str = "min_max", always_zero: bool = False):
         super().__init__()
