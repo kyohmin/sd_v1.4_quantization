@@ -10,11 +10,13 @@ class QuantModel(nn.Module):
         self.sm_abit = kwargs.get('sm_abit', 8)
         self.in_channels = u_net.in_channels
         self.quant_hyperparams = quant_hyperparams
-        if hasattr(u_net, 'image_size'): self.image_size # default 32, latent input image size
-        self.quantizables = self.get_quantizables()
+        self.image_size = getattr(u_net, 'image_size', 32)
+        self.quantizables = get_quantizables()
         
         # Refactor (replace) the module or block with Quant version
+        print("Quant Module Refactor Start")
         self.quant_module_refactor(self.model, self.quant_hyperparams)
+        print("Quant Block Refactor Start")
         self.quant_block_refactor(self.model, self.quant_hyperparams)
 
     def quant_module_refactor(self, module, quant_hyperparams):
@@ -29,8 +31,10 @@ class QuantModel(nn.Module):
         for name, child_module in block.named_children():
             if type(child_module) in self.quantizables:
                 if type(child_module) == BasicTransformerBlock:
+                    print("BasicTransformer")
                     setattr(block, name, QuantBasicTransformerBlock(child_module, act_quant_params, sm_abit=self.sm_abit))
                 elif type(child_module) == ResBlock:
+                    print("ResBlock")
                     setattr(block, name, QuantResBlock(child_module, act_quant_params))
             else:
                 self.quant_block_refactor(child_module, quant_hyperparams)

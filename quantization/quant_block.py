@@ -14,8 +14,8 @@ from ldm.modules.attention import BasicTransformerBlock, exists, default
 class BaseQuantBlock(nn.Module):
     def __init__(self, act_quant_params: dict={}):
         super().__init__()
-        self.use_weight_quant = False
-        self.use_act_quant = False
+        self.use_weight_quant = True
+        self.use_act_quant = True
 
         self.act_quantizer = Quantizer(**act_quant_params)
         self.activation_function = StraightThrough()
@@ -70,7 +70,7 @@ class QuantResBlock(BaseQuantBlock, TimestepBlock): # TimestepBlock to ensure mo
             h = self.in_layers(x)
         
         emb_out = self.emb_layers(emb).type(h.dtype)
-        while len(emb_out.shpe) < len(h.shape): emb_out = emb_out[..., None] # Match the shape until it is.
+        while len(emb_out.shape) < len(h.shape): emb_out = emb_out[..., None] # Match the shape until it is.
         
         if self.use_scale_shift_norm:
             out_norm, out_rest = self.out_layers[0], self.out_layers[1:] # Norm & (SiLU, DropOut, Zero_module)
@@ -143,7 +143,6 @@ class QuantBasicTransformerBlock(BaseQuantBlock):
         
         act_quant_params_w = act_quant_params.copy()
         act_quant_params_w['n_bits'] = sm_abit
-        act_quant_params_w['always_zero'] = False
         self.attn1.act_quantizer_w = Quantizer(**act_quant_params_w)
         self.attn2.act_quantizer_w = Quantizer(**act_quant_params_w)
 

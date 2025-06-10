@@ -1,145 +1,149 @@
 import torch
 import torch.nn as nn
 
-
 class Quantizer(nn.Module):
     def __init__(self, n_bits: int = 8, channel_wise: bool = True, leaf_param: bool = False, scale_method: str = "min_max"):
         super().__init__()
+        # Quantization Params
         self.n_bits = n_bits
         self.q_max = 2 ** self.n_bits - 1  # Asymmetric-only
-        self.scale = None
         self.scale_method = scale_method
-        self.zero = None
         self.inited = False
         self.channel_wise = channel_wise
 
-        # For Activation
-        self.running_stat = False
-        self.leaf_param = leaf_param
+        # Activation Params
+        self.running_stat = False # For tracking min/max for act
+        self.leaf_param = leaf_param # For training scale/zero for act
         if self.leaf_param:
-            self.x_min = None
-            self.x_max = None
+            self.register_buffer("x_min", torch.tensor(0.0))
+            self.register_buffer("x_max", torch.tensor(0.0))
+            self.scale = nn.Parameter(torch.tensor(0.0))
+            self.zero = nn.Parameter(torch.tensor(0.0))
+        else: # Weight
+            self.register_buffer("scale", torch.tensor(0.0))
+            self.register_buffer("zero", torch.tensor(0.0))
 
     def forward(self, x: torch.Tensor):
-        # Initialize scale and zero
+        # Initialize scale and zero for first-run
         if not self.inited:
-            self.scale, self.zero = self.get_scale_zero(x, self.channel_wise)
-            if self.leaf_param:
-                self.scale = torch.nn.Parameter(self.scale)
+
+            init_scale, init_zero = self._get_scale_zero(x, self.channel_wise)
+            with torch.no_grad():
+                self.scale.data = init_scale
+                self.zero.data = torch.tensor(init_zero, device = x.device)
+
             self.inited = True
 
-        # Update min,max,scale,zero
-        if self.running_stat: self.act_momentum_update(x)
+        # For activation, update min, max, scale, and zero
+        if self.running_stat: self._act_momentum_update(x)
 
         # Fake Quantization
-        x_quant, _, _ = self.quantize(x)
-        x_dequant = self.dequantize(x_quant)
+        x_quant, _, _ = self._quantize(x) # Use saved scale & zero
+        x_dequant = self._dequantize(x_quant) # Use saved scale & zero
         return x_dequant
     
-    def quantize(self, x: torch.Tensor, x_min = None, x_max = None):
+    def bitwidth_refactor(self, refactored_bit: int):
+        self.n_bits = refactored_bit
+        self.q_max = 2 ** self.n_bits -1
+        self.inited = False
+    
+    def _quantize(self, x: torch.Tensor, x_min = None, x_max = None):
+        # If self.scale and self.zero already stored
         if x_min is None and x_max is None:
-            x_int = self.round_ste(x / self.scale) + self.zero
-            x_quant = torch.clamp(x_int, 0, self.q_max)
+            x_quant = torch.clamp(self._round_ste(x / self.scale) + self.zero, 0, self.q_max)
             return x_quant, self.scale, self.zero
         
-        scale = (x_max - x_min) / self.q_max
-        zero = torch.round(torch.tensor(-x_min / scale, device=x.device, dtype=x.dtype))
-        x_int = self.round_ste(x / scale) + zero
+        # Recompute scale and zero to get new x_quant
+        scale = torch.clamp((x_max - x_min), min=1e-8) / self.q_max
+        zero = (-x_min / scale).round()
+        x_int = self._round_ste(x / scale) + zero
         x_quant = torch.clamp(x_int, 0, self.q_max)
         return x_quant, scale, zero
 
-    def dequantize(self, x: torch.Tensor, scale = None, zero = None):
+    def _dequantize(self, x: torch.Tensor, scale = None, zero = None):
         if scale is None and zero is None:
             return (x - self.zero) * self.scale
         else:
             return (x - zero) * scale
 
-    def get_scale_zero(self, x: torch.Tensor, channel_wise: bool = True):
+    def _get_scale_zero(self, x: torch.Tensor, channel_wise: bool = True):
+        scale, zero = None, None
         if channel_wise:
-            n_channels = x.size(0)
-            scale_tensor = torch.zeros(n_channels, dtype=x.dtype, device=x.device)
-            zero_tensor = torch.zeros(n_channels, dtype=x.dtype, device=x.device)
-
-            if self.leaf_param:
-                self.x_min = torch.zeros(n_channels, dtype=x.dtype, device=x.device)
-                self.x_max = torch.zeros(n_channels, dtype=x.dtype, device=x.device)
-
-            for c in range(n_channels):
-                x_c = x[c]
-                c_min = x_c.min().item()
-                c_max = x_c.max().item()
-                
-                if self.scale_method == 'min_max':
-                    c_scale = max(c_max - c_min, 1e-8) / self.q_max
-                    c_zero  = round(-c_min / c_scale)
-                elif self.scale_method == 'mse':
-                    best_loss = float('inf')
-                    best_scale = None
-                    best_zero = None
-                    for i in range(90):
-                        i_max = c_max * (1.0 - 0.01 * i)
-                        i_min = c_min * (1.0 - 0.01 * i)
-
-                        i_quant, i_scale, i_zero = self.quantize(x_c, i_min, i_max)
-                        i_dequant = self.dequantize(i_quant, i_scale, i_zero)
-
-                        loss = self.lp_loss(x_c.unsqueeze(0), i_dequant.unsqueeze(0), p=2.4, reduction ='none')
-                        if loss < best_loss:
-                            best_loss = loss
-                            best_scale = i_scale
-                            best_zero = i_zero
-                        
-                    c_scale = best_scale
-                    c_zero = best_zero
-                
-                scale_tensor[c] = c_scale
-                zero_tensor[c] = c_zero
-
-                if self.leaf_param:
-                    self.x_min[c] = c_min
-                    self.x_max[c] = c_max
-                
-            shape = [n_channels] + [1] * (x.dim() - 1)
-            return scale_tensor.view(*shape), zero_tensor.view(*shape)
-
-        else:
-            x_min = x.min().item()
-            x_max = x.max().item()
+            x_clone = x.clone().detach()
+            n_channels = x_clone.shape[0]
+            if len(x.shape) == 4:
+                print("shape 4:", x.shape)
+                x_max = x_clone.abs().max(dim=-1)[0].max(dim=-1)[0].max(dim=-1)[0]
+            elif len(x.shape) == 3:
+                print("shape 3:", x.shape)
+                x_max = x_clone.abs().max(dim=-1)[0].max(dim=-1)[0]
+            else:
+                print("shape 2:", x.shape)
+                x_max = x_clone.abs().max(dim=-1)[0]
             
-            if self.scale_method == 'min_max': 
-                scale = max(x_max - x_min, 1e-8) / self.q_max
-                zero = round(-x_min / scale)
+            scale = x_max.clone()
+            zero = x_max.clone()
 
-            elif self.scale_method == 'mse':
-                best_loss = float('inf')
-                best_scale = None
-                best_zero = None
-                for i in range(90):
-                    i_max = x_max * (1.0 - 0.01 * i)
-                    i_min = x_min * (1.0 - 0.01 * i)
-
-                    x_quant, i_scale, i_zero = self.quantize(x, i_min, i_max)
-                    x_dequant = self.dequantize(x_quant, i_scale, i_zero)
-                    loss = self.lp_loss(x.unsqueeze(0), x_dequant.unsqueeze(0), p=2.4, reduction='none')
-
-                    if loss < best_loss:
-                        best_loss = loss
-                        best_scale = i_scale
-                        best_zero = i_zero
-                
-                scale = best_scale
-                zero = best_zero
-
+            for channel in range(n_channels):
+                scale[channel], zero[channel] = self._get_scale_zero(x_clone[channel], channel_wise=False)
+            
+            if len(x.shape) == 4:
+                scale = scale.view(-1,1,1,1)
+                zero = zero.view(-1,1,1,1)
+            elif len(x.shape) == 3:
+                scale = scale.view(-1,1,1)
+                zero = zero.view(-1,1,1)
+            else:
+                scale = scale.view(-1,1)
+                zero = zero.view(-1,1)
+        
+        else:
             if self.leaf_param:
-                self.x_min = x_min
-                self.x_max = x_max
+                self.x_min = x.data.min()
+                self.x_max = x.data.max()
 
-            return torch.tensor(scale, dtype=x.dtype, device=x.device), torch.tensor(zero, dtype=x.dtype, device=x.device)
+            if 'min_max' in self.scale_method:
+                x_min = min(x.min().item(), 0)
+                x_max = max(x.max().item(), 0)
+                scale = float(x.max().item() - x.min().item()) / self.q_max
+            
+                zero = round(-x_min / scale)
+                scale = torch.tensor(scale).type_as(x)
+            elif 'mse' in self.scale_method:
+                # 1) get tensor mins & maxes (shape: scalar tensor on correct device)
+                x_min_t = torch.clamp(x.min(), max=0.0)
+                x_max_t = torch.clamp(x.max(), min=0.0)
 
-    def act_momentum_update(self, x: torch.Tensor, act_range_momentum: float = 0.95):
-        assert(self.inited)
-        assert(self.leaf_param)
+                best_score = float('inf')
+                best_scale = None
+                best_zero  = None
 
+                # 2) search for the best clipping window
+                for i in range(80):
+                    factor  = 1.0 - (i * 0.01)
+                    new_min = x_min_t * factor         # still a tensor
+                    new_max = x_max_t * factor
+
+                    # quantize/dequantize with tensor bounds
+                    x_q, sc, zp = self._quantize(x, new_min, new_max)
+                    x_dq = self._dequantize(x_q, sc, zp)
+
+                    # compute loss per sample (or change reduction if you prefer)
+                    score = self._lp_loss(x, x_dq, p=2.4, reduction='all')
+                    if score < best_score:
+                        best_score = score
+                        best_scale = sc
+                        best_zero  = zp
+
+                if best_scale is None:
+                    raise RuntimeError("MSE-based scale search failed")
+
+                scale, zero = best_scale, best_zero
+        
+        # print("scale:", scale.data.item(), "\nzero:", zero.data.item())
+        return scale, zero
+
+    def _act_momentum_update(self, x: torch.Tensor, act_range_momentum: float = 0.95):
         if self.channel_wise:
             flat = x.detach().permute(1, 0, 2, 3).contiguous().view(x.size(1), -1)
             x_min = flat.min(dim=1)[0]
@@ -148,34 +152,25 @@ class Quantizer(nn.Module):
             x_min = x.detach().min()
             x_max = x.detach().max()
 
-        self.x_min = self.x_min * act_range_momentum + x_min * (1.0 - act_range_momentum)
-        self.x_max = self.x_max * act_range_momentum + x_max * (1.0 - act_range_momentum)
+        with torch.no_grad():
+            # Safely update buffer
+            self.x_min.mul_(act_range_momentum).add_(x_min, alpha=(1.0 - act_range_momentum))
+            self.x_max.mul_(act_range_momentum).add_(x_max, alpha=(1.0 - act_range_momentum))
 
-        span = torch.clamp(self.x_max - self.x_min, min=1e-8)
-        new_scale = span / self.q_max
-        new_zero = torch.round(-self.x_min / new_scale)
-
-        if isinstance(self.scale, nn.Parameter):
-            self.scale.data = new_scale
-        else:
-            self.scale = nn.Parameter(new_scale)
-        self.zero = new_zero
-
-    def bitwidth_refactor(self, refactored_bit: int):
-        self.n_bits = refactored_bit
-        self.q_max = 2 ** self.n_bits -1
-        self.inited = False
+            # Recalculate scale and zero and update
+            new_scale = torch.clamp((self.x_max - self.x_min), min=1e-8) / self.q_max
+            new_zero = (-self.x_min / new_scale).round()
+            self.scale.copy_(new_scale)
+            self.zero.copy_(new_zero)
 
     # StraightThrough Estimator
     @staticmethod
-    def round_ste(x: torch.Tensor):
+    def _round_ste(x: torch.Tensor):
         return (x - x.detach()) + x.detach().round()
 
-    # For MSE
-    def lp_loss(self, pred: torch.Tensor, tgt: torch.Tensor, p=2.0, reduction='none'):
-        diff = (pred - tgt).abs().pow(p)
+    # MSE loss computation
+    def _lp_loss(self, prediction: torch.Tensor, target: torch.Tensor, p=2.0, reduction='none'):
         if reduction == 'none':
-            b = diff.size(0)
-            return diff.view(b, -1).sum(dim=1).mean()
-        else:
-            return diff.mean()
+            return (target - prediction).abs().pow(p).sum(1).mean()
+        else: # all elements
+            return (target - prediction).abs().pow(p).mean()

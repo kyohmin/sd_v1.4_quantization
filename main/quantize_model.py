@@ -95,9 +95,7 @@ def generate_samples(model, opt):
     # Prepare repeated prompts for each batch
     prompts_list = [prompt] * batch_size
 
-    # Pre-allocate NumPy array for all images in HWC uint8 format
-    C, H, W = input_shape
-    all_samples = np.empty((total_samples, H, W, C), dtype=np.uint8)
+    all_samples = None
     ptr = 0
 
     sampler = DDIMSampler(model)
@@ -130,6 +128,10 @@ def generate_samples(model, opt):
 
                 x_np = (x * 255.0).byte().cpu().permute(0, 2, 3, 1).numpy()
 
+                if all_samples is None:
+                    _, H, W, C = x_np.shape
+                    all_samples = np.empty((total_samples, H, W, C), dtype=np.uint8)
+
                 all_samples[ptr:ptr + batch_size] = x_np
                 ptr += batch_size
 
@@ -148,20 +150,37 @@ def generate_samples(model, opt):
     print(f"Saved all {total_samples} samples as PNGs in {out_dir}")
 
 def wrap_quant(model, quant_hyperparams):
-    weight_param, act_param = quant_hyperparams
     quant_unet = QuantModel(
-        model=model.model.diffusion_model,
-        weight_quant_params=weight_param,
-        act_quant_params=act_param
+        u_net=model.model.diffusion_model,
+        quant_hyperparams=quant_hyperparams
     )
     model.model.diffusion_model = quant_unet
 
     return model
 
-def generate_cali_data(model, opt):
-    # Read Samples
-    # Split into Cali
-    pass
+@torch.no_grad()
+def calibrate(model, opt):
+    # 1) Turn on running‐stat wherever it's supported
+    for m in model.model.diffusion_model.modules():
+        if hasattr(m, "set_running_stat"):
+            m.set_running_stat(True)
+
+    # 2) Run through a few batches to fill those stats
+    generate_samples(model, opt)
+
+    # 3) Freeze them again
+    for m in model.model.diffusion_model.modules():
+        if hasattr(m, "set_running_stat"):
+            m.set_running_stat(False)
+
+    return model
+
+def save_checkpoint(model, ckpt_path):
+    state_dict = model.module.state_dict() if hasattr(model, "module") else model.state_dict()
+
+    os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+    torch.save(state_dict, ckpt_path)
+    print(f"Saved quantized model weights to {ckpt_path}")
 
 def main():
     seed_everything(42)
@@ -172,24 +191,24 @@ def main():
 
     # 1. Load model - DONE
     model = load_model(config_path=opt.in_config, ckpt_path=opt.in_ckpt)
+    model = model.cuda()
 
     # 2. Generate Calibration Data (From Q-Diffusion) - DONE
-    generate_samples(model, opt)
+    # generate_samples(model, opt)
 
     # 3. Define Quant Unet and replace
-    wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'scale_method': 'mse'}
-    aq_params = {'n_bits': opt.act_bit, 'symmetric': opt.a_sym, 'channel_wise': False, 'scale_method': 'mse', 'leaf_param': opt.quant_act}
-    quantized_model = wrap_quant(model, opt, (wq_params, aq_params))
+    wq_params = {'n_bits': opt.weight_bit, 'channel_wise': True, 'leaf_param': False,'scale_method': 'mse'}
+    aq_params = {'n_bits': opt.act_bit, 'channel_wise': False, 'leaf_param': True, 'scale_method': 'mse'}
+    quantized_model = wrap_quant(model, (wq_params, aq_params))
 
-    # # 4. Generate Calibration Data
-    # generate_cali_data()
+    # 4. Calibrate
+    # calibrated_model = calibrate(quantized_model, opt)
 
-    # # 5. Calibrate
-    # calibrated_model = calibrate(quant_model, opt, quant_hyperparams)
+    # 5. Test Quantized Generation
+    generate_samples(quantized_model, opt)
 
     # # 6. Save Model and Config
-    # save calibrated_model as pth
-    # save calibrated_model.state_dict as pth
+    save_checkpoint(quantized_model, opt.out_ckpt)
 
 if __name__ == "__main__":
     main()

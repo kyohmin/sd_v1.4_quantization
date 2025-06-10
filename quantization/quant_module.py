@@ -40,8 +40,8 @@ class QuantModule(nn.Module):
             self.org_bias = None
 
         # Turn off quantization by default
-        self.use_weight_quant = False
-        self.use_act_quant = False
+        self.use_weight_quant = True
+        self.use_act_quant = True
 
         # Define Quantizers
         self.weight_quantizer = Quantizer(**self.weight_quant_params)
