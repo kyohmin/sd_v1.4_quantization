@@ -22,9 +22,9 @@ class BaseQuantBlock(nn.Module):
 
         self.ignore_reconstruction = False
 
-        def set_quant_state(self, weight_quant:bool = False, act_quant: bool = False):
-            self.use_weight_quant = weight_quant
-            self.use_act_quant = act_quant
+    def set_quant_state(self, weight_quant:bool = False, act_quant: bool = False):
+        self.use_weight_quant = weight_quant
+        self.use_act_quant = act_quant
 
 
 class QuantResBlock(BaseQuantBlock, TimestepBlock): # TimestepBlock to ensure module to receive emb

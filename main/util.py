@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
+from PIL import Image
+import numpy as np
 import importlib
 
 def load_model(config_path: str, ckpt_path: str): # DONE
@@ -53,7 +55,7 @@ def get_train_samples(opt, sample_data, sampling_step=None):
         ts = torch.cat([all_ts[i][:num_samples] for i in timesteps], dim=0)
 
     conds = None
-    if opt.cond:
+    if True:
         cs = sample_data["cs"]
         ucs = sample_data["ucs"]
         if num_st == 1:
@@ -72,3 +74,27 @@ def custom_to_np(x):
     sample = sample.permute(0, 2, 3, 1)
     sample = sample.contiguous()
     return sample
+
+def make_image_grid(images, rows, cols):
+    pil_imgs = []
+    for img in images:
+        if isinstance(img, np.ndarray):
+            pil = Image.fromarray(img)
+        else:
+            pil = img
+        pil_imgs.append(pil.convert("RGB"))
+
+    W, H = pil_imgs[0].size
+
+    grid = Image.new("RGB", (cols * W, rows * H), color = (0,0,0))
+
+    for idx, img in enumerate(pil_imgs):
+        if idx >= rows * cols:
+            break
+        # optionally resize
+        tile = img.resize((W, H), Image.LANCZOS)
+        r = idx // cols
+        c = idx % cols
+        grid.paste(tile, (c * W, r * H))
+
+    return grid

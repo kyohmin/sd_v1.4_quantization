@@ -31,10 +31,8 @@ class QuantModel(nn.Module):
         for name, child_module in block.named_children():
             if type(child_module) in self.quantizables:
                 if type(child_module) == BasicTransformerBlock:
-                    print("BasicTransformer")
                     setattr(block, name, QuantBasicTransformerBlock(child_module, act_quant_params, sm_abit=self.sm_abit))
                 elif type(child_module) == ResBlock:
-                    print("ResBlock")
                     setattr(block, name, QuantResBlock(child_module, act_quant_params))
             else:
                 self.quant_block_refactor(child_module, quant_hyperparams)
